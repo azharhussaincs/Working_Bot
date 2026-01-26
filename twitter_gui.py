@@ -30,6 +30,7 @@ PKT = timezone(timedelta(hours=5))
 # ────────────────────────────────────────────────
 stop_event = threading.Event()
 running = False
+was_stopped = False       # ← NEW: flag to detect real STOP click
 all_results = []          # for partial save
 executor = None           # reference to ThreadPoolExecutor
 
@@ -49,7 +50,7 @@ def log(msg):
     print(msg)
 
 # ────────────────────────────────────────────────
-# CORE WORKER (improved with retry & tab close handling)
+# CORE WORKER — added frequent stop checks
 # ────────────────────────────────────────────────
 def process_accounts(account_batch, time_window_min, max_tweets, run_output_dir, results_list):
     if stop_event.is_set():
@@ -75,11 +76,13 @@ def process_accounts(account_batch, time_window_min, max_tweets, run_output_dir,
                 max_retries = 2
 
                 while retry_count <= max_retries:
+                    if stop_event.is_set():
+                        break
+
                     try:
+                        page.goto(url, timeout=90000, wait_until="domcontentloaded")
                         if stop_event.is_set():
                             break
-
-                        page.goto(url, timeout=90000, wait_until="domcontentloaded")
                         time.sleep(4 + random.uniform(1, 2))
                         if stop_event.is_set():
                             break
@@ -144,8 +147,7 @@ def process_accounts(account_batch, time_window_min, max_tweets, run_output_dir,
                         if stop_event.is_set():
                             break
 
-                        # Success — no need to retry
-                        break
+                        break  # success
 
                     except (TimeoutError, PlaywrightError) as e:
                         retry_count += 1
@@ -155,7 +157,6 @@ def process_accounts(account_batch, time_window_min, max_tweets, run_output_dir,
                             log(f"⚠️ Giving up after retries: {url}")
                             break
 
-                        # Tab closed or page broken → recreate page
                         if page.is_closed():
                             page = context.new_page()
                         else:
@@ -176,11 +177,12 @@ def process_accounts(account_batch, time_window_min, max_tweets, run_output_dir,
 # MAIN AUTOMATION THREAD
 # ────────────────────────────────────────────────
 def run_automation():
-    global running, all_results, executor
+    global running, all_results, executor, was_stopped
     running = True
+    was_stopped = False   # Reset flag on every new run
     btn_start.config(state="disabled")
     btn_stop.config(state="normal")
-    all_results = []  # Reset results for new run
+    all_results = []
 
     try:
         if not os.path.exists(EXCEL_PATH):
@@ -276,32 +278,36 @@ def save_excel(results, excel_path):
     log(f"Partial/Full Excel saved → {excel_path} ({len(results)} items)")
 
 def stop():
-    global running, executor
+    global running, executor, was_stopped
     if running:
         stop_event.set()
-        log("Stopping... (waiting for current tasks to finish or be cancelled)")
+        log("STOP clicked — terminating remaining operations...")
 
-        time.sleep(2.5)
+        time.sleep(3.0)
 
         if executor is not None:
-            log("Shutting down thread pool...")
+            log("Forcing thread pool shutdown...")
             executor.shutdown(wait=False, cancel_futures=True)
             executor = None
-            log("Thread pool shutdown complete.")
+            log("Thread pool shutdown done.")
 
-        if all_results:
-            run_time = datetime.now().strftime("%Y-%m-%d_%H-%M")
-            excel_output = os.path.join(BASE_DIR, f"captured_tweets_{run_time}_partial.xlsx")
-            save_excel(all_results, excel_output)
-        else:
-            log("No screenshots taken – no partial Excel saved.")
+        # Save partial ONLY if STOP was actually clicked (not on normal finish)
+        if was_stopped:
+            if all_results:
+                run_time = datetime.now().strftime("%Y-%m-%d_%H-%M")
+                excel_output = os.path.join(BASE_DIR, f"captured_tweets_{run_time}_partial.xlsx")
+                save_excel(all_results, excel_output)
+            else:
+                log("No data captured – no partial Excel saved.")
+        # else: normal finish — do nothing here (normal Excel already saved)
 
         running = False
         btn_start.config(state="normal")
         btn_stop.config(state="disabled")
         stop_event.clear()
+        was_stopped = False  # Reset for next run
 
-        log("Stop complete. Ready for new run.")
+        log("STOP complete. All threads terminated. Ready for new run.")
 
 # ────────────────────────────────────────────────
 # GUI
@@ -347,7 +353,9 @@ btn_start = tk.Button(frame_buttons, text="START", font=("Segoe UI", 11, "bold")
 btn_start.pack(side="left", padx=20)
 
 btn_stop = tk.Button(frame_buttons, text="STOP", font=("Segoe UI", 11, "bold"),
-                     bg="#f44336", fg="white", width=12, command=stop, state="disabled")
+                     bg="#f44336", fg="white", width=12,
+                     command=lambda: [globals().__setitem__('was_stopped', True), stop()],  # Set flag before stop
+                     state="disabled")
 btn_stop.pack(side="left", padx=20)
 
 # ── Log area ──
