@@ -2,12 +2,21 @@ import pandas as pd
 import time
 import random
 import os
+import sys
+import shutil
 import threading
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 from datetime import datetime, timezone, timedelta
 from playwright.sync_api import sync_playwright, TimeoutError, Error as PlaywrightError
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# ────────────────────────────────────────────────
+# Force Playwright to use bundled browsers in exe
+# ────────────────────────────────────────────────
+if getattr(sys, 'frozen', False):
+    browsers_path = os.path.join(sys._MEIPASS, "playwright", "driver", "package", ".local-browsers")
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browsers_path
 
 # ────────────────────────────────────────────────
 # CONFIG DEFAULTS (can be changed in GUI)
@@ -30,9 +39,48 @@ PKT = timezone(timedelta(hours=5))
 # ────────────────────────────────────────────────
 stop_event = threading.Event()
 running = False
-was_stopped = False       # ← NEW: flag to detect real STOP click
+was_stopped = False       # flag to detect real STOP click
 all_results = []          # for partial save
 executor = None           # reference to ThreadPoolExecutor
+
+# ────────────────────────────────────────────────
+# BUNDLED RESOURCE HELPERS (for PyInstaller --onefile)
+# ────────────────────────────────────────────────
+def get_bundled_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller exe"""
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+
+def ensure_excel_template():
+    """Auto-copy bundled OSINT_Links.xlsx if missing in current directory"""
+    target_excel = os.path.join(BASE_DIR, "OSINT_Links.xlsx")
+
+    if os.path.exists(target_excel):
+        log("Using existing OSINT_Links.xlsx in current folder.")
+        return
+
+    bundled_excel = get_bundled_path("OSINT_Links.xlsx")
+
+    if not os.path.exists(bundled_excel):
+        messagebox.showerror("Critical Error", "Embedded Excel template not found.\nPlease rebuild the exe.")
+        sys.exit(1)
+
+    try:
+        shutil.copyfile(bundled_excel, target_excel)
+        log("First run: Created default OSINT_Links.xlsx template in current folder.")
+        messagebox.showinfo(
+            "First Run",
+            "Default template created.\n\n"
+            "Please edit OSINT_Links.xlsx with your Twitter/X profile links\n"
+            "and press START again."
+        )
+    except Exception as e:
+        messagebox.showerror("Error", f"Could not create template Excel:\n{e}")
+        sys.exit(1)
 
 # ────────────────────────────────────────────────
 # HELPERS
@@ -62,7 +110,22 @@ def process_accounts(account_batch, time_window_min, max_tweets, run_output_dir,
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
+            # Use bundled browser path if running as exe
+            launch_kwargs = {"headless": False}
+            if getattr(sys, 'frozen', False):
+                chrome_path = os.path.join(
+                    sys._MEIPASS,
+                    "playwright",
+                    "driver",
+                    "package",
+                    ".local-browsers",
+                    "chromium-1200",  # your exact version
+                    "chrome-win64",
+                    "chrome.exe"
+                )
+                launch_kwargs["executable_path"] = chrome_path
+
+            browser = p.chromium.launch(**launch_kwargs)
             context = browser.new_context(viewport={"width": 1280, "height": 900})
             page = context.new_page()
 
@@ -354,16 +417,19 @@ btn_start.pack(side="left", padx=20)
 
 btn_stop = tk.Button(frame_buttons, text="STOP", font=("Segoe UI", 11, "bold"),
                      bg="#f44336", fg="white", width=12,
-                     command=lambda: [globals().__setitem__('was_stopped', True), stop()],  # Set flag before stop
+                     command=lambda: [globals().__setitem__('was_stopped', True), stop()],
                      state="disabled")
 btn_stop.pack(side="left", padx=20)
 
-# ── Log area ──
+# ── Log area ── (must be created before calling ensure_excel_template)
 text_log = scrolledtext.ScrolledText(root, height=22, width=92, font=("Consolas", 10))
 text_log.pack(padx=12, pady=8, fill="both", expand=True)
 
 # Initial log
 text_log.insert(tk.END, "GUI ready. Adjust settings and press START.\n\n")
+
+# NOW safe to call ensure_excel_template (text_log exists)
+ensure_excel_template()
 
 root.protocol("WM_DELETE_WINDOW", lambda: [stop(), root.destroy()])  # graceful exit
 root.mainloop()
