@@ -28,12 +28,7 @@ jobs:
           python -m playwright install
 
       - name: Build Windows executable
-        run: |
-          pyinstaller ^
-            --onefile ^
-            --windowed ^
-            --name TwitterScreenshotTool ^
-            twitter_gui.py
+        run: pyinstaller --onefile --windowed --name TwitterScreenshotTool twitter_gui.py
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
