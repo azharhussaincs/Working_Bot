@@ -25,18 +25,10 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install pyinstaller
-          python -m playwright install
 
       - name: Build Windows executable with Playwright browsers
         run: |
-          # Get Playwright drivers path
-          $browsers = python -c "import pathlib, playwright; print(str(pathlib.Path(playwright.__file__).parent / 'drivers'))"
-          
-          # Build EXE with PyInstaller and include browsers
-          pyinstaller --onefile --windowed `
-            --name TwitterScreenshotTool `
-            --add-data "$browsers;playwright_drivers" `
-            twitter_gui.py
+          pyinstaller --onefile --windowed --name TwitterScreenshotTool --add-data "playwright_drivers;playwright_drivers" twitter_gui.py
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
