@@ -26,9 +26,23 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build Windows executable with Playwright browsers
+      - name: Download Playwright Browsers to local folder
+        shell: pwsh
         run: |
-          pyinstaller --onefile --windowed --name TwitterScreenshotTool --add-data "playwright_drivers;playwright_drivers" twitter_gui.py
+          mkdir playwright_drivers
+          $env:PLAYWRIGHT_BROWSERS_PATH = "$(pwd)\playwright_drivers"
+          python -m playwright install chromium
+
+      - name: Build Windows executable with Playwright browsers
+        shell: pwsh
+        run: |
+          $env:PLAYWRIGHT_BROWSERS_PATH = "$(pwd)\playwright_drivers"
+          # PyInstaller might need Playwright's own hooks.
+          # Including the Excel template to ensure it is bundled.
+          pyinstaller --onefile --windowed --name TwitterScreenshotTool `
+            --add-data "playwright_drivers;playwright_drivers" `
+            --add-data "OSINT_Links.xlsx;." `
+            twitter_gui.py
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4

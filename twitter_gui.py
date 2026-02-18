@@ -38,6 +38,31 @@ else:
 # Path to bundled Playwright browsers
 browser_path = os.path.join(base_path, "playwright_drivers")
 
+# On Windows, PyInstaller bundles might have a slightly different structure if we just copy the folder.
+# We expect: playwright_drivers/chrome-win/chrome.exe (for example)
+# Let's make it more robust.
+
+def get_chromium_executable():
+    """Find the chromium executable within the bundled drivers folder."""
+    # During dev (not frozen), let's prioritize system/pip playwright if available
+    # but still allow overriding via local playwright_drivers folder.
+    if not getattr(sys, 'frozen', False):
+        if not os.path.exists(browser_path):
+            # Not frozen and no local drivers? p.chromium.launch() will find it.
+            return None
+
+    if sys.platform == "win32":
+        # Search for chrome.exe in the playwright_drivers directory
+        for root, dirs, files in os.walk(browser_path):
+            if "chrome.exe" in files:
+                return os.path.join(root, "chrome.exe")
+    else:
+        # Search for chrome in the playwright_drivers directory (Linux/macOS)
+        for root, dirs, files in os.walk(browser_path):
+            if "chrome" in files:
+                return os.path.join(root, "chrome")
+    return None
+
 # ────────────────────────────────────────────────
 # CONFIG DEFAULTS (can be changed in GUI)
 # ────────────────────────────────────────────────
@@ -150,10 +175,19 @@ def process_accounts(account_batch, time_window_min, max_tweets, run_output_dir,
                 return
 
             # Launch browser using bundled drivers
-            browser = p.chromium.launch(
-                headless=headless,
-                executable_path=os.path.join(browser_path, "chromium")
-            )
+            chrome_exe = get_chromium_executable()
+            
+            if chrome_exe:
+                browser = p.chromium.launch(
+                    headless=headless,
+                    executable_path=chrome_exe
+                )
+            else:
+                # If not found (and not frozen), it might use system playwright
+                if getattr(sys, 'frozen', False):
+                    log("❌ Critical Error: Bundled Chromium executable not found in 'playwright_drivers'.")
+                    return
+                browser = p.chromium.launch(headless=headless)
             # Register browser for cleanup
             global active_browsers
             active_browsers.append(browser)
