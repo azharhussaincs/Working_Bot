@@ -1,8 +1,8 @@
+from playwright.sync_api import sync_playwright
+import os, sys
 import pandas as pd
 import time
 import random
-import os
-import sys
 import shutil
 import threading
 import tkinter as tk
@@ -11,7 +11,7 @@ import contextlib
 import io
 from tkinter import ttk, scrolledtext, messagebox
 from datetime import datetime, timezone, timedelta
-from playwright.sync_api import sync_playwright, TimeoutError, Error as PlaywrightError
+from playwright.sync_api import TimeoutError, Error as PlaywrightError
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Suppress greenlet threading warnings that occur during forced browser shutdown
@@ -29,12 +29,9 @@ def suppress_stderr():
     finally:
         sys.stderr = old_stderr
 
-# ────────────────────────────────────────────────
-# Force Playwright to use bundled browsers in exe
-# ────────────────────────────────────────────────
+# Fix Playwright path for PyInstaller
 if getattr(sys, 'frozen', False):
-    browsers_path = os.path.join(sys._MEIPASS, "playwright", "driver", "package", ".local-browsers")
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browsers_path
+    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = os.path.join(sys._MEIPASS, "browsers")
 
 # ────────────────────────────────────────────────
 # CONFIG DEFAULTS (can be changed in GUI)
@@ -136,22 +133,7 @@ def process_accounts(account_batch, time_window_min, max_tweets, run_output_dir,
             if stop_event.is_set():
                 return
 
-            # Use bundled browser path if running as exe
-            launch_kwargs = {"headless": headless}
-            if getattr(sys, 'frozen', False):
-                chrome_path = os.path.join(
-                    sys._MEIPASS,
-                    "playwright",
-                    "driver",
-                    "package",
-                    ".local-browsers",
-                    "chromium-1200",  # your exact version
-                    "chrome-win64",
-                    "chrome.exe"
-                )
-                launch_kwargs["executable_path"] = chrome_path
-
-            browser = p.chromium.launch(**launch_kwargs)
+            browser = p.chromium.launch(headless=headless)
             # Register browser for cleanup
             global active_browsers
             active_browsers.append(browser)
@@ -585,260 +567,169 @@ def cleanup_after_run():
     log("Ready for new run.\n")
 
 # ────────────────────────────────────────────────
-# GUI
+# GUI DESIGN & COLORS
 # ────────────────────────────────────────────────
+BG_COLOR = "#0F1419"        # Twitter-like dark background
+CARD_BG = "#161B22"         # Slightly lighter dark for cards
+HEADER_BG = "#1DA1F2"       # Twitter Blue
+TEXT_PRIMARY = "#FFFFFF"    # White text
+TEXT_SECONDARY = "#71767B"  # Gray text
+ACCENT_COLOR = "#1DA1F2"    # Twitter Blue accent
+SUCCESS_COLOR = "#00BA7C"   # Green
+ERROR_COLOR = "#F4212E"     # Red
+LOG_BG = "#000000"          # Black for logs
+LOG_FG = "#E7E9EA"          # Off-white for logs
+
 root = tk.Tk()
 root.title("Twitter/X Screenshot Tool")
-root.geometry("900x700")
-root.resizable(False, False)
-
-# Configure color scheme
-BG_COLOR = "#f5f6fa"
-HEADER_BG = "#2c3e50"
-HEADER_FG = "#ffffff"
-FRAME_BG = "#ffffff"
-LABEL_FG = "#2c3e50"
-ENTRY_BG = "#ffffff"
-BTN_START_BG = "#27ae60"
-BTN_START_HOVER = "#229954"
-BTN_STOP_BG = "#e74c3c"
-BTN_STOP_HOVER = "#c0392b"
-LOG_BG = "#2c3e50"
-LOG_FG = "#ecf0f1"
-
+root.geometry("900x800")
 root.configure(bg=BG_COLOR)
 
-# ── Header Frame ──
-header_frame = tk.Frame(root, bg=HEADER_BG, height=70)
-header_frame.pack(fill="x", padx=0, pady=0)
+# Attempt to use a modern font
+MAIN_FONT = ("Segoe UI", 10)
+HEADER_FONT = ("Segoe UI", 18, "bold")
+SUBHEADER_FONT = ("Segoe UI", 11, "bold")
+MONO_FONT = ("Consolas", 9)
+
+# ttk Style configuration
+style = ttk.Style()
+style.theme_use('clam')  # 'clam' is often more customizable than 'default'
+
+# Configure ttk styles
+style.configure("TFrame", background=BG_COLOR)
+style.configure("Card.TFrame", background=CARD_BG, relief="flat")
+style.configure("TLabel", background=BG_COLOR, foreground=TEXT_PRIMARY, font=MAIN_FONT)
+style.configure("Card.TLabel", background=CARD_BG, foreground=TEXT_PRIMARY, font=MAIN_FONT)
+style.configure("Header.TLabel", background=HEADER_BG, foreground=TEXT_PRIMARY, font=HEADER_FONT)
+style.configure("SubHeader.TLabel", background=CARD_BG, foreground=ACCENT_COLOR, font=SUBHEADER_FONT)
+style.configure("TCheckbutton", background=CARD_BG, foreground=TEXT_PRIMARY, font=MAIN_FONT)
+style.map("TCheckbutton", background=[('active', CARD_BG)], foreground=[('active', TEXT_PRIMARY)])
+
+# Custom rounded-look button simulation using flat buttons
+def create_modern_button(parent, text, color, hover_color, command, width=15):
+    btn = tk.Button(
+        parent,
+        text=text,
+        font=("Segoe UI", 11, "bold"),
+        bg=color,
+        fg="white",
+        activebackground=hover_color,
+        activeforeground="white",
+        relief="flat",
+        cursor="hand2",
+        command=command,
+        width=width,
+        pady=8
+    )
+    def on_enter(e): btn['bg'] = hover_color
+    def on_leave(e): btn['bg'] = color
+    btn.bind("<Enter>", on_enter)
+    btn.bind("<Leave>", on_leave)
+    return btn
+
+# ── Header ──
+header_frame = tk.Frame(root, bg=HEADER_BG, height=100)
+header_frame.pack(fill="x", side="top")
 header_frame.pack_propagate(False)
 
-header_label = tk.Label(
+tk.Label(
     header_frame,
     text="Twitter/X Screenshot Tool",
-    font=("Segoe UI", 18, "bold"),
+    font=HEADER_FONT,
     bg=HEADER_BG,
-    fg=HEADER_FG
-)
-header_label.pack(pady=20)
+    fg=TEXT_PRIMARY
+).pack(pady=(20, 5))
 
-subtitle_label = tk.Label(
+tk.Label(
     header_frame,
-    text="Capture recent tweets from monitored accounts",
+    text="Automated OSINT Capture Utility",
     font=("Segoe UI", 10),
     bg=HEADER_BG,
-    fg="#95a5a6"
-)
-subtitle_label.pack(pady=0)
+    fg="#E1E8ED"
+).pack()
 
-# ── Main Container ──
-main_container = tk.Frame(root, bg=BG_COLOR)
-main_container.pack(fill="both", expand=True, padx=15, pady=15)
+# ── Main Content Area ──
+main_container = tk.Frame(root, bg=BG_COLOR, padx=20, pady=20)
+main_container.pack(fill="both", expand=True)
 
-# ── Settings Frame ──
-frame_settings = tk.LabelFrame(
-    main_container,
-    text=" ⚙ Configuration Settings ",
-    font=("Segoe UI", 11, "bold"),
-    bg=FRAME_BG,
-    fg=LABEL_FG,
-    relief="solid",
-    borderwidth=1,
-    padx=20,
-    pady=15
-)
-frame_settings.pack(fill="x", pady=(0, 15))
+# ── Settings Card ──
+settings_card = tk.Frame(main_container, bg=CARD_BG, padx=20, pady=20, highlightthickness=1, highlightbackground="#333")
+settings_card.pack(fill="x", pady=(0, 20))
 
-# Settings grid with improved spacing and alignment
-settings_grid = tk.Frame(frame_settings, bg=FRAME_BG)
-settings_grid.pack(fill="x", padx=10, pady=5)
+tk.Label(
+    settings_card,
+    text="⚙ CONFIGURATION",
+    font=SUBHEADER_FONT,
+    bg=CARD_BG,
+    fg=ACCENT_COLOR
+).grid(row=0, column=0, sticky="w", pady=(0, 15))
 
-row = 0
+# Settings Grid
+grid_frame = tk.Frame(settings_card, bg=CARD_BG)
+grid_frame.grid(row=1, column=0, sticky="nsew")
 
-# Time Window
-lbl_time = tk.Label(
-    settings_grid,
-    text="Time Window (minutes):",
-    font=("Segoe UI", 10),
-    bg=FRAME_BG,
-    fg=LABEL_FG,
-    anchor="w"
-)
-lbl_time.grid(row=row, column=0, sticky="w", padx=5, pady=8)
+def create_label_entry(parent, row, label_text, default_val, hint_text):
+    tk.Label(parent, text=label_text, bg=CARD_BG, fg=TEXT_PRIMARY, font=MAIN_FONT, anchor="w").grid(row=row, column=0, sticky="w", pady=5)
+    entry = tk.Entry(parent, width=15, font=MAIN_FONT, bg="#1C2128", fg=TEXT_PRIMARY, insertbackground=TEXT_PRIMARY, relief="flat", borderwidth=5)
+    entry.insert(0, str(default_val))
+    entry.grid(row=row, column=1, sticky="w", padx=10, pady=5)
+    tk.Label(parent, text=hint_text, bg=CARD_BG, fg=TEXT_SECONDARY, font=("Segoe UI", 9)).grid(row=row, column=2, sticky="w", pady=5)
+    return entry
 
-entry_time = tk.Entry(
-    settings_grid,
-    width=12,
-    font=("Segoe UI", 10),
-    relief="solid",
-    borderwidth=1
-)
-entry_time.insert(0, str(DEFAULT_TIME_WINDOW_MIN))
-entry_time.grid(row=row, column=1, sticky="w", padx=10)
+entry_time = create_label_entry(grid_frame, 0, "Time Window (min):", DEFAULT_TIME_WINDOW_MIN, "(1–1440)")
+entry_tweets = create_label_entry(grid_frame, 1, "Max Tweets / Acc:", DEFAULT_MAX_TWEETS_PER_ACC, "(Recent tweets count)")
+entry_workers = create_label_entry(grid_frame, 2, "Parallel Workers:", DEFAULT_MAX_WORKERS, "(Recommended: 1–4)")
 
-lbl_time_hint = tk.Label(
-    settings_grid,
-    text="(Range: 1–1440 minutes)",
-    font=("Segoe UI", 9),
-    bg=FRAME_BG,
-    fg="#7f8c8d"
-)
-lbl_time_hint.grid(row=row, column=2, sticky="w", padx=5)
-row += 1
-
-# Max Tweets
-lbl_tweets = tk.Label(
-    settings_grid,
-    text="Max Tweets per Account:",
-    font=("Segoe UI", 10),
-    bg=FRAME_BG,
-    fg=LABEL_FG,
-    anchor="w"
-)
-lbl_tweets.grid(row=row, column=0, sticky="w", padx=5, pady=8)
-
-entry_tweets = tk.Entry(
-    settings_grid,
-    width=12,
-    font=("Segoe UI", 10),
-    relief="solid",
-    borderwidth=1
-)
-entry_tweets.insert(0, str(DEFAULT_MAX_TWEETS_PER_ACC))
-entry_tweets.grid(row=row, column=1, sticky="w", padx=10)
-
-lbl_tweets_hint = tk.Label(
-    settings_grid,
-    text="(Number of tweets to capture)",
-    font=("Segoe UI", 9),
-    bg=FRAME_BG,
-    fg="#7f8c8d"
-)
-lbl_tweets_hint.grid(row=row, column=2, sticky="w", padx=5)
-row += 1
-
-# Max Workers
-lbl_workers = tk.Label(
-    settings_grid,
-    text="Parallel Workers:",
-    font=("Segoe UI", 10),
-    bg=FRAME_BG,
-    fg=LABEL_FG,
-    anchor="w"
-)
-lbl_workers.grid(row=row, column=0, sticky="w", padx=5, pady=8)
-
-entry_workers = tk.Entry(
-    settings_grid,
-    width=12,
-    font=("Segoe UI", 10),
-    relief="solid",
-    borderwidth=1
-)
-entry_workers.insert(0, str(DEFAULT_MAX_WORKERS))
-entry_workers.grid(row=row, column=1, sticky="w", padx=10)
-
-lbl_workers_hint = tk.Label(
-    settings_grid,
-    text="(Recommended: ≤ 4 workers)",
-    font=("Segoe UI", 9),
-    bg=FRAME_BG,
-    fg="#7f8c8d"
-)
-lbl_workers_hint.grid(row=row, column=2, sticky="w", padx=5)
-row += 1
-
-# Headless Mode Checkbox
 var_headless = tk.BooleanVar(value=HEADLESS_MODE)
 check_headless = tk.Checkbutton(
-    settings_grid,
+    grid_frame,
     text="Run in Headless Mode (browser hidden)",
     variable=var_headless,
-    font=("Segoe UI", 10),
-    bg=FRAME_BG,
-    fg=LABEL_FG,
-    activebackground=FRAME_BG,
-    selectcolor=FRAME_BG
-)
-check_headless.grid(row=row, column=0, columnspan=3, sticky="w", padx=5, pady=8)
-
-# ── Control Buttons Frame ──
-frame_buttons = tk.Frame(main_container, bg=BG_COLOR)
-frame_buttons.pack(pady=15)
-
-btn_start = tk.Button(
-    frame_buttons,
-    text="▶ START",
-    font=("Segoe UI", 12, "bold"),
-    bg=BTN_START_BG,
-    fg="white",
-    width=15,
-    height=2,
+    font=MAIN_FONT,
+    bg=CARD_BG,
+    fg=TEXT_PRIMARY,
+    activebackground=CARD_BG,
+    activeforeground=TEXT_PRIMARY,
+    selectcolor="#1C2128",
     relief="flat",
-    cursor="hand2",
-    command=lambda: threading.Thread(target=run_automation, daemon=True).start()
+    onvalue=True,
+    offvalue=False
 )
-btn_start.pack(side="left", padx=15)
+check_headless.grid(row=3, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
-# Hover effects for START button
-def on_start_enter(e):
-    if btn_start['state'] == 'normal':
-        btn_start['bg'] = BTN_START_HOVER
+# ── Action Buttons ──
+button_frame = tk.Frame(main_container, bg=BG_COLOR)
+button_frame.pack(fill="x", pady=(0, 20))
 
-def on_start_leave(e):
-    if btn_start['state'] == 'normal':
-        btn_start['bg'] = BTN_START_BG
-
-btn_start.bind("<Enter>", on_start_enter)
-btn_start.bind("<Leave>", on_start_leave)
-
-btn_stop = tk.Button(
-    frame_buttons,
-    text="■ STOP",
-    font=("Segoe UI", 12, "bold"),
-    bg=BTN_STOP_BG,
-    fg="white",
-    width=15,
-    height=2,
-    relief="flat",
-    cursor="hand2",
-    command=stop,
-    state="disabled"
+btn_start = create_modern_button(
+    button_frame, "▶ START", SUCCESS_COLOR, "#1A915D",
+    lambda: threading.Thread(target=run_automation, daemon=True).start()
 )
-btn_stop.pack(side="left", padx=15)
+btn_start.pack(side="left", padx=(0, 10))
 
-# Hover effects for STOP button
-def on_stop_enter(e):
-    if btn_stop['state'] == 'normal':
-        btn_stop['bg'] = BTN_STOP_HOVER
-
-def on_stop_leave(e):
-    if btn_stop['state'] == 'normal':
-        btn_stop['bg'] = BTN_STOP_BG
-
-btn_stop.bind("<Enter>", on_stop_enter)
-btn_stop.bind("<Leave>", on_stop_leave)
-
-# ── Log Frame ──
-log_frame = tk.LabelFrame(
-    main_container,
-    text=" 📋 Activity Log ",
-    font=("Segoe UI", 11, "bold"),
-    bg=FRAME_BG,
-    fg=LABEL_FG,
-    relief="solid",
-    borderwidth=1,
-    padx=5,
-    pady=5
+btn_stop = create_modern_button(
+    button_frame, "■ STOP", ERROR_COLOR, "#D31D2A",
+    stop
 )
-log_frame.pack(fill="both", expand=True, pady=(0, 0))
+btn_stop.config(state="disabled")
+btn_stop.pack(side="left")
 
-# ── Log area ── (must be created before calling ensure_excel_template)
+# ── Log Card ──
+log_card = tk.Frame(main_container, bg=CARD_BG, padx=2, pady=2, highlightthickness=1, highlightbackground="#333")
+log_card.pack(fill="both", expand=True)
+
+tk.Label(
+    log_card,
+    text=" 📋 ACTIVITY LOG",
+    font=SUBHEADER_FONT,
+    bg=CARD_BG,
+    fg=ACCENT_COLOR
+).pack(anchor="w", padx=15, pady=10)
+
 text_log = scrolledtext.ScrolledText(
-    log_frame,
-    height=18,
-    width=100,
-    font=("Consolas", 9),
+    log_card,
+    height=12,
+    font=MONO_FONT,
     bg=LOG_BG,
     fg=LOG_FG,
     insertbackground=LOG_FG,
@@ -846,10 +737,14 @@ text_log = scrolledtext.ScrolledText(
     padx=10,
     pady=10
 )
-text_log.pack(fill="both", expand=True, padx=5, pady=5)
+text_log.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
 # Initial log
 text_log.insert(tk.END, "GUI ready. Adjust settings and press START.\n\n")
+
+# Footer
+footer = tk.Label(root, text="Designed for Efficiency & Speed", font=("Segoe UI", 8), bg=BG_COLOR, fg=TEXT_SECONDARY)
+footer.pack(side="bottom", pady=5)
 
 # NOW safe to call ensure_excel_template (text_log exists)
 ensure_excel_template()
