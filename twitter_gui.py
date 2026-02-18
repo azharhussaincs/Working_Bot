@@ -29,15 +29,27 @@ def suppress_stderr():
     finally:
         sys.stderr = old_stderr
 
-# Fix Playwright path for PyInstaller
+# Determine base path for bundled EXE
 if getattr(sys, 'frozen', False):
-    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = os.path.join(sys._MEIPASS, "browsers")
+    base_path = sys._MEIPASS
+else:
+    base_path = os.path.dirname(os.path.abspath(__file__))
+
+# Path to bundled Playwright browsers
+browser_path = os.path.join(base_path, "playwright_drivers")
 
 # ────────────────────────────────────────────────
 # CONFIG DEFAULTS (can be changed in GUI)
 # ────────────────────────────────────────────────
 BASE_DIR = os.getcwd()
-EXCEL_PATH = os.path.join(BASE_DIR, "OSINT_Links.xlsx")
+
+# Path to Excel file (standalone relative)
+if getattr(sys, 'frozen', False):
+    app_path = sys._MEIPASS
+else:
+    app_path = os.path.dirname(os.path.abspath(__file__))
+
+EXCEL_PATH = os.path.join(app_path, "OSINT_Links.xlsx")
 BASE_OUTPUT_DIR = os.path.join(BASE_DIR, "screenshots")
 
 DEFAULT_TIME_WINDOW_MIN = 60
@@ -79,8 +91,12 @@ def ensure_excel_template():
     """Auto-copy bundled OSINT_Links.xlsx if missing in current directory"""
     target_excel = os.path.join(BASE_DIR, "OSINT_Links.xlsx")
 
-    if os.path.exists(target_excel):
-        log("Using existing OSINT_Links.xlsx in current folder.")
+    # If we are running as a frozen EXE, we expect EXCEL_PATH to point to the one next to EXE or bundled.
+    # The instructions say: "Make sure the .xlsx file is kept in the same folder as the EXE."
+    # And "This ensures the EXE can read the Excel file even when the user moves it to another folder."
+    
+    if os.path.exists(EXCEL_PATH):
+        log(f"Using OSINT_Links.xlsx at: {EXCEL_PATH}")
         return
 
     bundled_excel = get_bundled_path("OSINT_Links.xlsx")
@@ -133,7 +149,11 @@ def process_accounts(account_batch, time_window_min, max_tweets, run_output_dir,
             if stop_event.is_set():
                 return
 
-            browser = p.chromium.launch(headless=headless)
+            # Launch browser using bundled drivers
+            browser = p.chromium.launch(
+                headless=headless,
+                executable_path=os.path.join(browser_path, "chromium")
+            )
             # Register browser for cleanup
             global active_browsers
             active_browsers.append(browser)
