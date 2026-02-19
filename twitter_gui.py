@@ -9,7 +9,8 @@ import tkinter as tk
 import warnings
 import contextlib
 import io
-from tkinter import ttk, scrolledtext, messagebox
+import json
+from tkinter import ttk, scrolledtext, messagebox, filedialog
 from datetime import datetime, timezone, timedelta
 from playwright.sync_api import TimeoutError, Error as PlaywrightError
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -30,10 +31,26 @@ def suppress_stderr():
         sys.stderr = old_stderr
 
 # Determine base path for bundled EXE
-if getattr(sys, 'frozen', False):
-    base_path = sys._MEIPASS
-else:
-    base_path = os.path.dirname(os.path.abspath(__file__))
+EXE_DIR = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+base_path = sys._MEIPASS if getattr(sys, 'frozen', False) else EXE_DIR
+
+# Configuration Persistence
+CONFIG_FILE = os.path.join(EXE_DIR, "config.json")
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_config(config):
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f)
+    except:
+        pass
 
 # Path to bundled Playwright browsers
 browser_path = os.path.join(base_path, "playwright_drivers")
@@ -66,16 +83,16 @@ def get_chromium_executable():
 # ────────────────────────────────────────────────
 # CONFIG DEFAULTS (can be changed in GUI)
 # ────────────────────────────────────────────────
-BASE_DIR = os.getcwd()
+BASE_DIR = EXE_DIR  # Use EXE directory as base for outputs
+BASE_OUTPUT_DIR = os.path.join(BASE_DIR, "screenshots")
 
 # Path to Excel file (standalone relative)
-if getattr(sys, 'frozen', False):
-    app_path = sys._MEIPASS
-else:
-    app_path = os.path.dirname(os.path.abspath(__file__))
+config = load_config()
+EXCEL_PATH = config.get("excel_path")
 
-EXCEL_PATH = os.path.join(app_path, "OSINT_Links.xlsx")
-BASE_OUTPUT_DIR = os.path.join(BASE_DIR, "screenshots")
+if not EXCEL_PATH or not os.path.exists(EXCEL_PATH):
+    # Default to OSINT_Links.xlsx in the same directory as the EXE
+    EXCEL_PATH = os.path.join(EXE_DIR, "OSINT_Links.xlsx")
 
 DEFAULT_TIME_WINDOW_MIN = 60
 MIN_TIME_WINDOW_MIN = 1
@@ -104,44 +121,68 @@ results_lock = threading.Lock()  # thread-safe access to all_results
 # BUNDLED RESOURCE HELPERS (for PyInstaller --onefile)
 # ────────────────────────────────────────────────
 def get_bundled_path(relative_path):
-    """Get absolute path to resource, works for dev and for PyInstaller exe"""
-    try:
+    """Get absolute path to resource from the bundled data (sys._MEIPASS)."""
+    if getattr(sys, 'frozen', False):
         base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base_path, relative_path)
 
 
 def ensure_excel_template():
-    """Auto-copy bundled OSINT_Links.xlsx if missing in current directory"""
-    target_excel = os.path.join(BASE_DIR, "OSINT_Links.xlsx")
-
-    # If we are running as a frozen EXE, we expect EXCEL_PATH to point to the one next to EXE or bundled.
-    # The instructions say: "Make sure the .xlsx file is kept in the same folder as the EXE."
-    # And "This ensures the EXE can read the Excel file even when the user moves it to another folder."
+    """Auto-copy bundled OSINT_Links.xlsx if missing and prompt user to select/confirm"""
+    global EXCEL_PATH
     
+    # Check if we have a valid Excel file
     if os.path.exists(EXCEL_PATH):
-        log(f"Using OSINT_Links.xlsx at: {EXCEL_PATH}")
+        log(f"Using Excel file at: {EXCEL_PATH}")
         return
 
+    # If not exists, try to create it in EXE_DIR from bundled template
+    default_target = os.path.join(EXE_DIR, "OSINT_Links.xlsx")
     bundled_excel = get_bundled_path("OSINT_Links.xlsx")
 
-    if not os.path.exists(bundled_excel):
-        messagebox.showerror("Critical Error", "Embedded Excel template not found.\nPlease rebuild the exe.")
-        sys.exit(1)
+    if not os.path.exists(default_target):
+        if os.path.exists(bundled_excel):
+            try:
+                shutil.copyfile(bundled_excel, default_target)
+                log(f"Created default OSINT_Links.xlsx template at: {default_target}")
+            except Exception as e:
+                log(f"Could not create default template: {e}")
+        else:
+            log("Bundled template OSINT_Links.xlsx not found.")
 
-    try:
-        shutil.copyfile(bundled_excel, target_excel)
-        log("First run: Created default OSINT_Links.xlsx template in current folder.")
+    # Always ask for file on first run or if missing
+    config = load_config()
+    first_run = config.get("excel_path") is None
+
+    if first_run or not os.path.exists(EXCEL_PATH):
         messagebox.showinfo(
-            "First Run",
-            "Default template created.\n\n"
-            "Please edit OSINT_Links.xlsx with your Twitter/X profile links\n"
-            "and press START again."
+            "Setup Required",
+            "Please select or confirm the 'OSINT_Links.xlsx' file to use for account links."
         )
-    except Exception as e:
-        messagebox.showerror("Error", f"Could not create template Excel:\n{e}")
-        sys.exit(1)
+        
+        selected_file = filedialog.askopenfilename(
+            title="Select OSINT_Links.xlsx",
+            initialdir=EXE_DIR,
+            initialfile="OSINT_Links.xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+
+        if selected_file:
+            EXCEL_PATH = selected_file
+            save_config({"excel_path": EXCEL_PATH})
+            log(f"Excel path saved: {EXCEL_PATH}")
+        else:
+            # If user cancels, we still need a file to proceed. 
+            # If default_target exists, use it, otherwise exit.
+            if os.path.exists(default_target):
+                EXCEL_PATH = default_target
+                save_config({"excel_path": EXCEL_PATH})
+                log(f"Using default Excel path: {EXCEL_PATH}")
+            else:
+                messagebox.showerror("Critical Error", "No Excel file selected. Application will exit.")
+                sys.exit(1)
 
 # ────────────────────────────────────────────────
 # HELPERS
@@ -289,11 +330,42 @@ def process_accounts(account_batch, time_window_min, max_tweets, run_output_dir,
                                     f"{handle}_{tweet_id}.png"
                                 )
 
-                                abs_path = os.path.abspath(screenshot_file).replace(os.sep, "/")
-                                image_link = f'=HYPERLINK("file:///{abs_path}", "View Image")'
+                                # Use local file path for hyperlink
+                                # In Windows Excel, file:///C:/path/to/file.png works
+                                abs_screenshot_path = os.path.abspath(screenshot_file).replace(os.sep, "/")
+                                if sys.platform == "win32" and not abs_screenshot_path.startswith("/"):
+                                    image_link = f'=HYPERLINK("file:///{abs_screenshot_path}", "View Image")'
+                                else:
+                                    image_link = f'=HYPERLINK("file://{abs_screenshot_path}", "View Image")'
 
                                 if stop_event.is_set(): break
-                                tweet.screenshot(path=screenshot_file)
+                                try:
+                                    # Ensure screenshot file path is absolute
+                                    screenshot_file = os.path.abspath(screenshot_file)
+                                    
+                                    # Ensure parent directory exists
+                                    os.makedirs(os.path.dirname(screenshot_file), exist_ok=True)
+                                    
+                                    # Take screenshot with a slight delay to ensure rendering
+                                    log(f"  ┖─ Capturing screenshot for {handle}...")
+                                    time.sleep(1) # Increased delay for better rendering
+                                    
+                                    # Verify page is still open
+                                    if page.is_closed():
+                                        log(f"  ┖─ ❌ Page closed before screenshot could be taken.")
+                                        continue
+                                        
+                                    tweet.screenshot(path=screenshot_file, timeout=30000)
+                                    
+                                    if os.path.exists(screenshot_file) and os.path.getsize(screenshot_file) > 0:
+                                        log(f"  ┖─ ✅ Screenshot saved: {os.path.basename(screenshot_file)}")
+                                    else:
+                                        log(f"  ┖─ ❌ Screenshot FAILED (file empty or not created): {screenshot_file}")
+                                        continue
+                                except Exception as e:
+                                    log(f"  ┖─ ❌ Screenshot error: {e}")
+                                    continue
+                                
                                 if stop_event.is_set(): break
 
                                 # Thread-safe result appending
